@@ -42,16 +42,16 @@
         
         async function handleAccountLink(e) {
             e.preventDefault();
-            const cid = document.getElementById('cid-input').value;
-            if (!cid || cid.length !== 13) {
-                showToast('กรุณากรอกเลขบัตรประชาชน 13 หลักให้ถูกต้อง', 'error');
+            const staffCode = document.getElementById('staff-code-input').value;
+            if (!staffCode) {
+                showToast('กรุณากรอกรหัสเจ้าหน้าที่', 'error');
                 return;
             }
             
             setLoading(true);
             try {
-                const { data, error } = await supabase.rpc('link_account_with_cid', {
-                    input_cid: cid
+                const { data, error } = await supabase.rpc('link_account_with_staff_code', {
+                    input_staff_code: staffCode
                 });
 
                 if (error) {
@@ -240,7 +240,7 @@
                              <p class="text-sm text-gray-600">${staff.is_admin ? '<span class="text-red-500 font-bold">Admin</span>' : 'User'}</p>
                         </div>
                         <div class="flex gap-2 justify-end">
-                            <button class="edit-btn p-2 text-blue-600 hover:text-blue-800" data-id="${staff.id}" data-name="${staff.name}" data-staff_type="${staff.staff_type || ''}" data-is_admin="${staff.is_admin}" data-cid="${staff.cid || ''}">แก้ไข</button>
+                            <button class="edit-btn p-2 text-blue-600 hover:text-blue-800" data-id="${staff.id}" data-name="${staff.name}" data-staff_type="${staff.staff_type || ''}" data-is_admin="${staff.is_admin}" data-staff_code="${staff.staff_code || ''}">แก้ไข</button>
                             <button class="delete-btn p-2 text-red-600 hover:text-red-800" data-id="${staff.id}" data-name="${staff.name}">ลบ</button>
                         </div>
                     `;
@@ -276,7 +276,7 @@
                 name: document.getElementById('staff-name').value,
                 staff_type: document.getElementById('staff-type').value,
                 is_admin: document.getElementById('staff-is-admin').checked,
-                cid: document.getElementById('staff-cid').value
+                staff_code: document.getElementById('staff-code').value
             };
 
             let error;
@@ -307,7 +307,7 @@
                 document.getElementById('staff-name').value = name;
                 document.getElementById('staff-type').value = target.dataset.staff_type;
                 document.getElementById('staff-is-admin').checked = target.dataset.is_admin === 'true';
-                document.getElementById('staff-cid').value = target.dataset.cid;
+                document.getElementById('staff-code').value = target.dataset.staff_code;
                 document.getElementById('staff-submit-btn').textContent = 'บันทึกการเปลี่ยนแปลง';
                 editingStaffId = id;
             }
@@ -860,11 +860,11 @@
     <div id="link-account-section" class="hidden flex items-center justify-center min-h-screen">
         <div class="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md">
             <h2 class="text-2xl font-bold text-center text-gray-800">เชื่อมบัญชีของคุณ</h2>
-            <p class="text-center text-gray-600">กรุณากรอกเลขบัตรประชาชน 13 หลัก เพื่อเชื่อมต่อบัญชีผู้ใช้งานของคุณกับข้อมูลบุคลากรในระบบ</p>
+            <p class="text-center text-gray-600">กรุณากรอกรหัสเจ้าหน้าที่ เพื่อเชื่อมต่อบัญชีผู้ใช้งานของคุณกับข้อมูลบุคลากรในระบบ</p>
             <form id="link-account-form" class="space-y-6">
                 <div>
-                    <label for="cid-input" class="block text-sm font-medium text-gray-700">เลขบัตรประชาชน</label>
-                    <input type="text" name="cid" id="cid-input" required maxlength="13" pattern="\d{13}" title="กรุณากรอกตัวเลข 13 หลัก" class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
+                    <label for="staff-code-input" class="block text-sm font-medium text-gray-700">รหัสเจ้าหน้าที่</label>
+                    <input type="text" name="staff_code" id="staff-code-input" required class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
                 </div>
                 <button id="link-cid-btn" type="submit" class="w-full py-2 px-4 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 flex justify-center items-center">
                     <span id="link-cid-btn-text">ยืนยันและเชื่อมบัญชี</span>
@@ -1012,7 +1012,7 @@
             <div class="mt-4">
                 <form id="staff-form" class="bg-gray-50 p-4 rounded-lg mb-4 space-y-4">
                      <div><label for="staff-name">ชื่อ-สกุล</label><input type="text" id="staff-name" required class="mt-1 block w-full p-2 border rounded-md"></div>
-                     <div><label for="staff-cid">เลขบัตรประชาชน (13 หลัก)</label><input type="text" id="staff-cid" required class="mt-1 block w-full p-2 border rounded-md" maxlength="13"></div>
+                     <div><label for="staff-code">รหัสเจ้าหน้าที่</label><input type="text" id="staff-code" required class="mt-1 block w-full p-2 border rounded-md"></div>
                      <div><label for="staff-type">ตำแหน่ง</label><input type="text" id="staff-type" required class="mt-1 block w-full p-2 border rounded-md"></div>
                      <div class="flex items-center"><input type="checkbox" id="staff-is-admin" class="h-4 w-4 rounded"><label for="staff-is-admin" class="ml-2">เป็นผู้ดูแลระบบ (Admin)</label></div>
                      <button id="staff-submit-btn" type="submit" class="w-full bg-blue-600 text-white py-2 rounded-md">เพิ่มบุคลากร</button>
