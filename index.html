@@ -84,9 +84,12 @@
                 console.error('Exception during logout:', e);
                 showToast('เกิดข้อผิดพลาดร้ายแรงระหว่างการออกจากระบบ', 'error');
             } finally {
+                // Force UI reset immediately, then perform a hard reload.
+                // This ensures a clean state even if signOut has issues.
                 currentUserProfile = null;
                 allStaffData = [];
-                showView('auth-section');
+                showView('auth-section'); // Immediately show login screen
+                // Use a slight delay before reload to ensure UI updates and prevent race conditions.
                 setTimeout(() => window.location.reload(true), 100); // true = force reload from server
             }
         }
@@ -788,10 +791,12 @@
             // Fetch leave records for this month
             const monthStartDate = `${year}-${String(month + 1).padStart(2, '0')}-01`;
             const monthEndDate = `${year}-${String(month + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+            
+            // FIX: Correct query to fetch records that OVERLAP with the current month, not just start in it.
             const { data: leaveRecords, error } = await supabase.from('leave_records')
                 .select('*')
-                .gte('start_date', monthStartDate)
-                .lte('start_date', monthEndDate);
+                .lte('start_date', monthEndDate) // Leave starts on or before the end of the month
+                .gte('end_date', monthStartDate);  // Leave ends on or after the start of the month
 
             if (error) {
                 showToast('ไม่สามารถดึงข้อมูลปฏิทินได้', 'error');
