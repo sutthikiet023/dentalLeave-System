@@ -74,8 +74,21 @@
         }
 
         async function handleLogout() {
-            await supabase.auth.signOut();
-            window.location.reload();
+            try {
+                const { error } = await supabase.auth.signOut();
+                if (error) {
+                    console.error('Error signing out:', error);
+                    showToast('เกิดข้อผิดพลาดในการออกจากระบบ: ' + error.message, 'error');
+                }
+            } catch (e) {
+                console.error('Exception during logout:', e);
+                showToast('เกิดข้อผิดพลาดร้ายแรงระหว่างการออกจากระบบ', 'error');
+            } finally {
+                currentUserProfile = null;
+                allStaffData = [];
+                showView('auth-section');
+                setTimeout(() => window.location.reload(true), 100); // true = force reload from server
+            }
         }
 
         // --- UI FUNCTIONS ---
@@ -87,8 +100,8 @@
         }
         
         function setLoading(isLoading) {
-            document.getElementById('link-cid-btn').disabled = isLoading;
-            document.getElementById('link-cid-btn-text').textContent = isLoading ? 'กำลังตรวจสอบ...' : 'ยืนยันและเชื่อมบัญชี';
+            document.getElementById('link-account-btn').disabled = isLoading;
+            document.getElementById('link-account-btn-text').textContent = isLoading ? 'กำลังตรวจสอบ...' : 'ยืนยันและเชื่อมบัญชี';
         }
 
         async function initializeAppView() {
@@ -136,28 +149,41 @@
                 renderCalendar(calendarDate);
             });
 
-
+            // More robust auth state handler
             supabase.auth.onAuthStateChange(async (event, session) => {
-                if (session && session.user) {
-                    const { data: profileData, error: profileError } = await supabase.rpc('get_my_profile');
-                    const userProfile = profileData && profileData.length > 0 ? profileData[0] : null;
-
-                    if (profileError) {
-                        console.error("Error fetching profile:", profileError);
-                        showToast('เกิดข้อผิดพลาดในการดึงข้อมูลโปรไฟล์', 'error');
-                        await handleLogout();
-                        return;
-                    }
-                    
-                    if (userProfile) {
-                        currentUserProfile = userProfile;
-                        initializeAppView();
-                    } else {
-                        showView('link-account-section');
-                    }
-                } else {
+                // On sign out or if there's no session, always show the login page.
+                if (event === 'SIGNED_OUT' || !session) {
                     currentUserProfile = null;
                     showView('auth-section');
+                    return;
+                }
+
+                // For any other event with a session (SIGNED_IN, TOKEN_REFRESHED),
+                // we re-fetch the profile to ensure we have the latest data.
+                if (session && session.user) {
+                    try {
+                        const { data: profileData, error: profileError } = await supabase.rpc('get_my_profile');
+                        
+                        if (profileError) {
+                            // If there's an error fetching the profile, it's safer to log out.
+                            throw profileError;
+                        }
+
+                        const userProfile = profileData && profileData.length > 0 ? profileData[0] : null;
+
+                        if (userProfile) {
+                            // Profile exists, user is linked. Show the main app.
+                            currentUserProfile = userProfile;
+                            initializeAppView();
+                        } else {
+                            // Profile does not exist, user needs to link their account.
+                            showView('link-account-section');
+                        }
+                    } catch (error) {
+                        console.error("Critical error during auth state change:", error);
+                        showToast('เกิดข้อผิดพลาดร้ายแรง โปรดลองอีกครั้ง', 'error');
+                        await handleLogout(); // Log out on critical failure
+                    }
                 }
             });
 
@@ -866,8 +892,8 @@
                     <label for="staff-code-input" class="block text-sm font-medium text-gray-700">รหัสเจ้าหน้าที่</label>
                     <input type="text" name="staff_code" id="staff-code-input" required class="w-full px-3 py-2 mt-1 border border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500">
                 </div>
-                <button id="link-cid-btn" type="submit" class="w-full py-2 px-4 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 flex justify-center items-center">
-                    <span id="link-cid-btn-text">ยืนยันและเชื่อมบัญชี</span>
+                <button id="link-account-btn" type="submit" class="w-full py-2 px-4 text-white bg-indigo-600 rounded-md hover:bg-indigo-700 flex justify-center items-center">
+                    <span id="link-account-btn-text">ยืนยันและเชื่อมบัญชี</span>
                 </button>
             </form>
         </div>
