@@ -22,6 +22,23 @@
 
         const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
+        // --- Service Worker Cleanup ---
+        // Runs after the page is fully loaded to avoid "invalid state" errors.
+        window.onload = () => {
+            if ('serviceWorker' in navigator) {
+                navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                    for(let registration of registrations) {
+                        registration.unregister().then(success => {
+                            if (success) console.log('Service Worker unregistered successfully.');
+                        });
+                    }
+                }).catch(function(err) {
+                    // This error can still happen in some sandboxed environments, but it's generally safe to ignore.
+                    console.warn('Service Worker unregistration check failed: ', err); 
+                });
+            }
+        };
+
         let currentUserProfile = null;
         let editingStaffId = null;
         let allStaffData = []; // Cache for all staff data
