@@ -23,7 +23,6 @@
         const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
         // --- Service Worker Cleanup ---
-        // Runs after the page is fully loaded to avoid "invalid state" errors.
         window.onload = () => {
             if ('serviceWorker' in navigator) {
                 navigator.serviceWorker.getRegistrations().then(function(registrations) {
@@ -33,7 +32,6 @@
                         });
                     }
                 }).catch(function(err) {
-                    // This error can still happen in some sandboxed environments, but it's generally safe to ignore.
                     console.warn('Service Worker unregistration check failed: ', err); 
                 });
             }
@@ -101,13 +99,10 @@
                 console.error('Exception during logout:', e);
                 showToast('เกิดข้อผิดพลาดร้ายแรงระหว่างการออกจากระบบ', 'error');
             } finally {
-                // Force UI reset immediately, then perform a hard reload.
-                // This ensures a clean state even if signOut has issues.
                 currentUserProfile = null;
                 allStaffData = [];
-                showView('auth-section'); // Immediately show login screen
-                // Use a slight delay before reload to ensure UI updates and prevent race conditions.
-                setTimeout(() => window.location.reload(true), 100); // true = force reload from server
+                showView('auth-section');
+                setTimeout(() => window.location.reload(true), 100);
             }
         }
 
@@ -171,38 +166,26 @@
 
             // More robust auth state handler
             supabase.auth.onAuthStateChange(async (event, session) => {
-                // On sign out or if there's no session, always show the login page.
                 if (event === 'SIGNED_OUT' || !session) {
                     currentUserProfile = null;
                     showView('auth-section');
                     return;
                 }
-
-                // For any other event with a session (SIGNED_IN, TOKEN_REFRESHED),
-                // we re-fetch the profile to ensure we have the latest data.
                 if (session && session.user) {
                     try {
                         const { data: profileData, error: profileError } = await supabase.rpc('get_my_profile');
-                        
-                        if (profileError) {
-                            // If there's an error fetching the profile, it's safer to log out.
-                            throw profileError;
-                        }
-
+                        if (profileError) throw profileError;
                         const userProfile = profileData && profileData.length > 0 ? profileData[0] : null;
-
                         if (userProfile) {
-                            // Profile exists, user is linked. Show the main app.
                             currentUserProfile = userProfile;
                             initializeAppView();
                         } else {
-                            // Profile does not exist, user needs to link their account.
                             showView('link-account-section');
                         }
                     } catch (error) {
                         console.error("Critical error during auth state change:", error);
                         showToast('เกิดข้อผิดพลาดร้ายแรง โปรดลองอีกครั้ง', 'error');
-                        await handleLogout(); // Log out on critical failure
+                        await handleLogout();
                     }
                 }
             });
@@ -247,20 +230,15 @@
 
             const groupOrder = ['ทันตแพทย์', 'ทันตาภิบาล', 'พนักงานบริการ', 'พนักงานช่วยเหลือคนไข้'];
             
-            // Group staff by their type
             const groupedStaff = data.reduce((acc, staff) => {
                 const type = staff.staff_type || 'อื่น ๆ';
-                if (!acc[type]) {
-                    acc[type] = [];
-                }
+                if (!acc[type]) acc[type] = [];
                 acc[type].push(staff);
                 return acc;
             }, {});
 
             const renderGroup = (groupName) => {
                 if (!groupedStaff[groupName]) return;
-
-                // For dropdown
                 const optgroup = document.createElement('optgroup');
                 optgroup.label = groupName;
                 groupedStaff[groupName].forEach(staff => {
@@ -271,7 +249,6 @@
                 });
                 staffSelector.appendChild(optgroup);
 
-                // For admin list
                 const header = document.createElement('div');
                 header.className = 'p-2 bg-gray-200 font-bold text-gray-700 mt-4 first:mt-0';
                 header.textContent = groupName;
@@ -294,14 +271,10 @@
                 });
             };
             
-            // Render in specified order
             groupOrder.forEach(groupName => renderGroup(groupName));
             
-            // Render remaining groups (like "อื่น ๆ")
             Object.keys(groupedStaff).forEach(groupName => {
-                if (!groupOrder.includes(groupName)) {
-                    renderGroup(groupName);
-                }
+                if (!groupOrder.includes(groupName)) renderGroup(groupName);
             });
 
             staffSelector.value = currentSelectedId;
@@ -423,7 +396,6 @@
             const selectedFiscalYear = parseInt(document.getElementById('fiscal-year-selector').value);
             const { startDate, endDate } = getFiscalYearRange(selectedFiscalYear);
 
-            // Fetch accumulated vacation for the specific fiscal year
             const { data: fiscalData, error: fiscalError } = await supabase
                 .from('staff_fiscal_year_data')
                 .select('accumulated_vacation')
@@ -604,7 +576,7 @@
                 div.innerHTML = `
                     <label for="year-${year}" class="font-medium">ปีงบประมาณ ${year}:</label>
                     <div class="flex items-center gap-2">
-                         <input type="number" id="year-${year}" value="${days}" class="w-24 p-1 border rounded-md text-center">
+                         <input type="number" step="0.5" id="year-${year}" value="${days}" class="w-24 p-1 border rounded-md text-center">
                          <button class="save-fiscal-btn bg-green-500 text-white text-sm py-1 px-2 rounded hover:bg-green-600" data-year="${year}">บันทึก</button>
                     </div>
                 `;
@@ -625,7 +597,7 @@
                 const staffId = document.getElementById('admin-edit-staff-id').value;
                 const year = parseInt(e.target.dataset.year);
                 const daysInput = document.getElementById(`year-${year}`);
-                const days = parseInt(daysInput.value);
+                const days = parseFloat(daysInput.value);
 
                 if(isNaN(days) || days < 0) {
                     showToast('กรุณาใส่จำนวนวันที่ถูกต้อง', 'error');
