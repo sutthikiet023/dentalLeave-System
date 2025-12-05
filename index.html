@@ -101,8 +101,9 @@
             } finally {
                 currentUserProfile = null;
                 allStaffData = [];
+                localStorage.clear(); // Explicitly clear local storage
                 showView('auth-section');
-                setTimeout(() => window.location.reload(true), 100);
+                // Removed window.location.reload(true) to prevent cache issues and enable SPA feel
             }
         }
 
