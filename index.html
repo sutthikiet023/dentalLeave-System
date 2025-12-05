@@ -15,7 +15,8 @@
     <link rel="preconnect" href="https://fonts.gstatic" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=swap" rel="stylesheet">
     <script type="module">
-        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm'
+        // FIX: Changed CDN from jsdelivr to esm.sh to resolve 'AuthClient' null error
+        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 
         const SUPABASE_URL = 'https://nekghcpcuqsrxetiqvmn.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5la2doY3BjdXFzcnhldGlxdm1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NzA0ODAsImV4cCI6MjA3MDI0NjQ4MH0.343Oimw3xQNF81k0QTijupa4Wzs0kbTYffxjhL12DMY';
@@ -396,6 +397,7 @@
             const selectedFiscalYear = parseInt(document.getElementById('fiscal-year-selector').value);
             const { startDate, endDate } = getFiscalYearRange(selectedFiscalYear);
 
+            // Fetch accumulated vacation for the specific fiscal year
             const { data: fiscalData, error: fiscalError } = await supabase
                 .from('staff_fiscal_year_data')
                 .select('accumulated_vacation')
