@@ -21,11 +21,16 @@
         const SUPABASE_URL = 'https://nekghcpcuqsrxetiqvmn.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5la2doY3BjdXFzcnhldGlxdm1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NzA0ODAsImV4cCI6MjA3MDI0NjQ4MH0.343Oimw3xQNF81k0QTijupa4Wzs0kbTYffxjhL12DMY';
 
-        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+        // Initialize Supabase client
+        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
+            auth: {
+                persistSession: true,
+                autoRefreshToken: true,
+            }
+        });
 
         // --- SECURITY FIX: URL Cleanup ---
         // Remove sensitive data (email, password) from URL query parameters immediately on load
-        // This prevents credentials from being visible if a form submission falls back to GET
         (function cleanUrl() {
             const url = new URL(window.location.href);
             let cleaned = false;
@@ -61,14 +66,19 @@
 
         // --- AUTH & LINKING FUNCTIONS ---
         async function handleLogin(e) {
-            e.preventDefault(); // This prevents the form from submitting to the URL
+            e.preventDefault(); 
             const email = e.target.email.value;
             const password = e.target.password.value;
+            
+            // Attempt login
             const { error } = await supabase.auth.signInWithPassword({ email, password });
+            
             if (error) {
+                console.error("Login error:", error);
                 showToast(`Login ไม่สำเร็จ: ${error.message}`, 'error');
             } else {
                  e.target.reset();
+                 // No need to reload manually here, onAuthStateChange will handle the transition
             }
         }
         
@@ -107,19 +117,45 @@
 
         async function handleLogout() {
             try {
-                const { error } = await supabase.auth.signOut();
-                if (error) {
-                    console.error('Error signing out:', error);
-                    showToast('เกิดข้อผิดพลาดในการออกจากระบบ: ' + error.message, 'error');
-                }
+                await supabase.auth.signOut();
             } catch (e) {
                 console.error('Exception during logout:', e);
-                showToast('เกิดข้อผิดพลาดร้ายแรงระหว่างการออกจากระบบ', 'error');
             } finally {
+                // CRITICAL FIX: Clear ALL storage to prevent stale sessions causing login loops
+                localStorage.clear();
+                sessionStorage.clear();
+                
                 currentUserProfile = null;
                 allStaffData = [];
-                showView('auth-section');
-                setTimeout(() => window.location.reload(true), 100);
+                
+                // Force a reload from the server (bypass cache)
+                window.location.reload(true);
+            }
+        }
+
+        // --- SYSTEM RESET FUNCTION ---
+        function handleSystemReset() {
+            if(confirm('ระบบจะทำการล้างข้อมูลแคชและโหลดหน้าเว็บใหม่ เพื่อแก้ปัญหาการเข้าใช้งาน ยืนยันหรือไม่?')) {
+                // Clear everything possible
+                localStorage.clear();
+                sessionStorage.clear();
+                
+                // Clear cookies (simple attempt)
+                document.cookie.split(";").forEach(function(c) { 
+                    document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+                });
+
+                // Unregister service workers again
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.getRegistrations().then(function(registrations) {
+                        for(let registration of registrations) {
+                            registration.unregister();
+                        }
+                    });
+                }
+                
+                // Hard reload
+                window.location.reload(true);
             }
         }
 
@@ -162,6 +198,7 @@
             document.getElementById('login-form').addEventListener('submit', handleLogin);
             document.getElementById('link-account-form').addEventListener('submit', handleAccountLink);
             document.getElementById('logout-btn').addEventListener('click', handleLogout);
+            document.getElementById('system-reset-btn').addEventListener('click', handleSystemReset);
             document.getElementById('yearly-summary').addEventListener('click', handleLeaveListClick);
             document.getElementById('close-edit-leave-modal-btn').addEventListener('click', closeEditLeaveModal);
             document.getElementById('edit-leave-form').addEventListener('submit', handleUpdateLeaveRecord);
@@ -183,6 +220,8 @@
 
             // More robust auth state handler
             supabase.auth.onAuthStateChange(async (event, session) => {
+                console.log("Auth State Changed:", event); // Debugging
+
                 if (event === 'SIGNED_OUT' || !session) {
                     currentUserProfile = null;
                     showView('auth-section');
@@ -191,8 +230,17 @@
                 if (session && session.user) {
                     try {
                         const { data: profileData, error: profileError } = await supabase.rpc('get_my_profile');
-                        if (profileError) throw profileError;
+                        
+                        if (profileError) {
+                            console.error("Profile fetch error:", profileError);
+                            // Do not auto-logout here immediately to prevent loop if DB is shaky, 
+                            // just show error. User can use Reset button.
+                            showToast('ไม่สามารถดึงข้อมูลโปรไฟล์ได้ กรุณากดรีเซ็ตระบบ', 'error');
+                            return;
+                        }
+                        
                         const userProfile = profileData && profileData.length > 0 ? profileData[0] : null;
+                        
                         if (userProfile) {
                             currentUserProfile = userProfile;
                             initializeAppView();
@@ -201,8 +249,7 @@
                         }
                     } catch (error) {
                         console.error("Critical error during auth state change:", error);
-                        showToast('เกิดข้อผิดพลาดร้ายแรง โปรดลองอีกครั้ง', 'error');
-                        await handleLogout();
+                        showToast('เกิดข้อผิดพลาดร้ายแรง โปรดกดรีเซ็ตระบบ', 'error');
                     }
                 }
             });
@@ -890,7 +937,7 @@
     </div>
 
     <!-- Auth Section -->
-    <div id="auth-section" class="flex items-center justify-center min-h-screen">
+    <div id="auth-section" class="flex items-center justify-center min-h-screen flex-col">
         <form id="login-form" class="w-full max-w-md p-8 space-y-6 bg-white rounded-lg shadow-md" method="POST">
             <h2 class="text-2xl font-bold text-center text-gray-800">เข้าสู่ระบบบันทึกการลา</h2>
             <div>
@@ -903,6 +950,12 @@
             </div>
             <button type="submit" class="w-full py-2 px-4 text-white bg-indigo-600 rounded-md hover:bg-indigo-700">เข้าสู่ระบบ</button>
         </form>
+        
+        <div class="mt-4 text-center">
+            <button id="system-reset-btn" type="button" class="text-sm text-gray-500 hover:text-gray-700 underline">
+                พบปัญหาการเข้าใช้งาน? คลิกเพื่อรีเซ็ตระบบ
+            </button>
+        </div>
     </div>
     
     <!-- Account Linking Section -->
