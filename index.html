@@ -101,9 +101,8 @@
             } finally {
                 currentUserProfile = null;
                 allStaffData = [];
-                localStorage.clear(); // Explicitly clear local storage
                 showView('auth-section');
-                // Removed window.location.reload(true) to prevent cache issues and enable SPA feel
+                setTimeout(() => window.location.reload(true), 100);
             }
         }
 
@@ -1092,4 +1091,3 @@
     </footer>
 </body>
 </html>
-
