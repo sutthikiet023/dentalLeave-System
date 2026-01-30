@@ -15,8 +15,8 @@
     <link rel="preconnect" href="https://fonts.gstatic" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Sarabun:wght@400;500;700&display=swap" rel="stylesheet">
     <script type="module">
-        // FIX: Changed CDN from jsdelivr to esm.sh to resolve 'AuthClient' null error
-        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+        // FIX: Pinned version to 2.39.3 to ensure stability
+        import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3'
 
         const SUPABASE_URL = 'https://nekghcpcuqsrxetiqvmn.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5la2doY3BjdXFzcnhldGlxdm1uIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTQ2NzA0ODAsImV4cCI6MjA3MDI0NjQ4MH0.343Oimw3xQNF81k0QTijupa4Wzs0kbTYffxjhL12DMY';
@@ -30,7 +30,6 @@
         });
 
         // --- SECURITY FIX: URL Cleanup ---
-        // Remove sensitive data (email, password) from URL query parameters immediately on load
         (function cleanUrl() {
             const url = new URL(window.location.href);
             let cleaned = false;
@@ -67,18 +66,29 @@
         // --- AUTH & LINKING FUNCTIONS ---
         async function handleLogin(e) {
             e.preventDefault(); 
+            
+            const submitBtn = e.target.querySelector('button[type="submit"]');
+            const originalText = submitBtn.textContent;
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'กำลังเข้าสู่ระบบ...';
+
             const email = e.target.email.value;
             const password = e.target.password.value;
             
-            // Attempt login
-            const { error } = await supabase.auth.signInWithPassword({ email, password });
-            
-            if (error) {
+            try {
+                const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+                
+                if (error) {
+                    throw error;
+                }
+
+                e.target.reset();
+                
+            } catch (error) {
                 console.error("Login error:", error);
-                showToast(`Login ไม่สำเร็จ: ${error.message}`, 'error');
-            } else {
-                 e.target.reset();
-                 // No need to reload manually here, onAuthStateChange will handle the transition
+                showToast(`เข้าสู่ระบบไม่สำเร็จ: ${error.message}`, 'error');
+                submitBtn.disabled = false;
+                submitBtn.textContent = originalText;
             }
         }
         
@@ -121,14 +131,10 @@
             } catch (e) {
                 console.error('Exception during logout:', e);
             } finally {
-                // CRITICAL FIX: Clear ALL storage to prevent stale sessions causing login loops
                 localStorage.clear();
                 sessionStorage.clear();
-                
                 currentUserProfile = null;
                 allStaffData = [];
-                
-                // Force a reload from the server (bypass cache)
                 window.location.reload(true);
             }
         }
@@ -136,25 +142,11 @@
         // --- SYSTEM RESET FUNCTION ---
         function handleSystemReset() {
             if(confirm('ระบบจะทำการล้างข้อมูลแคชและโหลดหน้าเว็บใหม่ เพื่อแก้ปัญหาการเข้าใช้งาน ยืนยันหรือไม่?')) {
-                // Clear everything possible
                 localStorage.clear();
                 sessionStorage.clear();
-                
-                // Clear cookies (simple attempt)
                 document.cookie.split(";").forEach(function(c) { 
                     document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
                 });
-
-                // Unregister service workers again
-                if ('serviceWorker' in navigator) {
-                    navigator.serviceWorker.getRegistrations().then(function(registrations) {
-                        for(let registration of registrations) {
-                            registration.unregister();
-                        }
-                    });
-                }
-                
-                // Hard reload
                 window.location.reload(true);
             }
         }
@@ -206,7 +198,7 @@
             document.getElementById('admin-report-btn').addEventListener('click', showReportView);
             document.getElementById('back-to-app-btn').addEventListener('click', () => showView('app-section'));
             document.getElementById('back-to-app-btn-report').addEventListener('click', () => showView('app-section'));
-            document.getElementById('generate-report-btn').addEventListener('click', generateYearlyReport);
+            document.getElementById('generate-report-btn').addEventListener('click', generateReport); // Changed to generateReport
             document.getElementById('calendar-view-btn').addEventListener('click', showCalendarView);
             document.getElementById('back-to-app-btn-calendar').addEventListener('click', () => showView('app-section'));
             document.getElementById('prev-month-btn').addEventListener('click', () => {
@@ -218,10 +210,18 @@
                 renderCalendar(calendarDate);
             });
 
+            // Report Type Selector Listener
+            document.getElementById('report-type-selector').addEventListener('change', (e) => {
+                const monthContainer = document.getElementById('report-month-container');
+                if (e.target.value === 'monthly') {
+                    monthContainer.classList.remove('hidden');
+                } else {
+                    monthContainer.classList.add('hidden');
+                }
+            });
+
             // More robust auth state handler
             supabase.auth.onAuthStateChange(async (event, session) => {
-                console.log("Auth State Changed:", event); // Debugging
-
                 if (event === 'SIGNED_OUT' || !session) {
                     currentUserProfile = null;
                     showView('auth-section');
@@ -233,8 +233,6 @@
                         
                         if (profileError) {
                             console.error("Profile fetch error:", profileError);
-                            // Do not auto-logout here immediately to prevent loop if DB is shaky, 
-                            // just show error. User can use Reset button.
                             showToast('ไม่สามารถดึงข้อมูลโปรไฟล์ได้ กรุณากดรีเซ็ตระบบ', 'error');
                             return;
                         }
@@ -470,12 +468,27 @@
 
             const accumulatedVacation = fiscalError ? 0 : fiscalData.accumulated_vacation;
             
-            const { data: leaveRecords, error } = await supabase.from('leave_records').select('*').eq('staff_id', staffId).gte('start_date', startDate).lte('start_date', endDate); 
+            // FIX: Use Overlap logic for display data as well
+            const { data: leaveRecords, error } = await supabase.from('leave_records')
+                .select('*')
+                .eq('staff_id', staffId)
+                .lte('start_date', endDate)
+                .gte('end_date', startDate);
+                
             if (error) { showToast('ไม่สามารถดึงข้อมูลการลาได้', 'error'); return; } 
             
-            const vacationTaken = leaveRecords.filter(r => r.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0); 
-            const personalTaken = leaveRecords.filter(r => r.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0); 
-            const sickTaken = leaveRecords.filter(r => r.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0); 
+            // Strict Calculation for "Remaining" (based on Start Date Rule)
+            const vacationTakenStrict = leaveRecords.filter(l => {
+                const recStart = new Date(l.start_date);
+                const periodStart = new Date(startDate);
+                const periodEnd = new Date(endDate);
+                return l.leave_type === 'vacation' && recStart >= periodStart && recStart <= periodEnd;
+            }).reduce((sum, r) => sum + r.days_taken, 0);
+
+            // Period Calculation (for display)
+            const vacationTaken = vacationTakenStrict; // Use strict for dashboard cards
+            const personalTaken = leaveRecords.filter(l => l.leave_type === 'personal' && new Date(l.start_date) >= new Date(startDate) && new Date(l.start_date) <= new Date(endDate)).reduce((sum, r) => sum + r.days_taken, 0); 
+            const sickTaken = leaveRecords.filter(l => l.leave_type === 'sick' && new Date(l.start_date) >= new Date(startDate) && new Date(l.start_date) <= new Date(endDate)).reduce((sum, r) => sum + r.days_taken, 0); 
             
             document.getElementById('accumulated-vacation').textContent = accumulatedVacation; 
             document.getElementById('vacation-taken').textContent = vacationTaken; 
@@ -703,11 +716,39 @@
         // --- ADMIN REPORT FUNCTIONS ---
         function showReportView() {
             populateFiscalYearSelector(document.getElementById('admin-report-fiscal-year-selector'));
-            document.getElementById('report-results-container').innerHTML = ''; // Clear previous report
+            populateMonthSelector(document.getElementById('report-month-selector'));
+            document.getElementById('report-results-container').innerHTML = '';
+            // Reset to default view (Yearly)
+            document.getElementById('report-type-selector').value = 'yearly';
+            document.getElementById('report-month-container').classList.add('hidden');
             showView('admin-report-section');
         }
 
-        async function generateYearlyReport() {
+        function populateMonthSelector(selector) {
+            selector.innerHTML = '';
+            // Fiscal year months: Oct (9) -> Sep (8)
+            // But we need to map them correctly to calendar months (0-11)
+            // Let's use 0-11 for value, but order them Oct-Sep in display?
+            // Or just list Jan-Dec for simplicity? User asked for Oct-Sep order.
+            
+            const months = [
+                { val: 9, name: "ตุลาคม" }, { val: 10, name: "พฤศจิกายน" }, { val: 11, name: "ธันวาคม" },
+                { val: 0, name: "มกราคม" }, { val: 1, name: "กุมภาพันธ์" }, { val: 2, name: "มีนาคม" },
+                { val: 3, name: "เมษายน" }, { val: 4, name: "พฤษภาคม" }, { val: 5, name: "มิถุนายน" },
+                { val: 6, name: "กรกฎาคม" }, { val: 7, name: "สิงหาคม" }, { val: 8, name: "กันยายน" }
+            ];
+
+            months.forEach((m) => {
+                const option = document.createElement('option');
+                option.value = m.val;
+                option.textContent = m.name;
+                selector.appendChild(option);
+            });
+            // Default to current month
+            selector.value = new Date().getMonth();
+        }
+
+        async function generateReport() {
             const reportBtn = document.getElementById('generate-report-btn');
             const container = document.getElementById('report-results-container');
             
@@ -716,58 +757,111 @@
             container.innerHTML = '<p class="text-center text-gray-500">กำลังดึงข้อมูล...</p>';
 
             try {
-                const selectedYear = parseInt(document.getElementById('admin-report-fiscal-year-selector').value);
-                const { startDate, endDate } = getFiscalYearRange(selectedYear);
+                const fiscalYearBE = parseInt(document.getElementById('admin-report-fiscal-year-selector').value);
+                const reportType = document.getElementById('report-type-selector').value;
+                const selectedMonthIndex = parseInt(document.getElementById('report-month-selector').value);
+                
+                // 1. Calculate Fiscal Year Range (for fetching fiscal data & base calculations)
+                const fiscalYearStartCE = fiscalYearBE - 544; // Start year CE (e.g. 2568 - 544 = 2024)
+                const fiscalYearStartDate = `${fiscalYearStartCE}-10-01`;
+                const fiscalYearEndDate = `${fiscalYearStartCE + 1}-09-30`;
 
-                // Fetch all necessary data in parallel
+                // 2. Calculate Report Date Range (for fetching leave records)
+                let reportStartDate, reportEndDate;
+
+                if (reportType === 'yearly') {
+                    reportStartDate = fiscalYearStartDate;
+                    reportEndDate = fiscalYearEndDate;
+                } else {
+                    // Monthly Report Logic
+                    // Determine calendar year based on fiscal year and selected month
+                    let calendarYearCE;
+                    if (selectedMonthIndex >= 9) { // Oct, Nov, Dec -> Previous Year
+                         calendarYearCE = fiscalYearBE - 544;
+                    } else { // Jan - Sep -> Current Year
+                         calendarYearCE = fiscalYearBE - 543;
+                    }
+
+                    const daysInMonth = new Date(calendarYearCE, selectedMonthIndex + 1, 0).getDate();
+                    reportStartDate = `${calendarYearCE}-${String(selectedMonthIndex + 1).padStart(2, '0')}-01`;
+                    reportEndDate = `${calendarYearCE}-${String(selectedMonthIndex + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
+                }
+
+                // 3. Fetch Data
+                // We fetch fiscal data for the Accumulated Vacation.
+                // We fetch ALL leave records for the entire fiscal year to calculate "Remaining" correctly (Annual Balance).
+                // We will filter for "Taken (Selected Period)" in JS.
                 const [fiscalDataRes, leaveRecordsRes] = await Promise.all([
-                    supabase.from('staff_fiscal_year_data').select('*').eq('fiscal_year_be', selectedYear),
-                    supabase.from('leave_records').select('*').gte('start_date', startDate).lte('start_date', endDate)
+                    supabase.from('staff_fiscal_year_data').select('*').eq('fiscal_year_be', fiscalYearBE),
+                    supabase.from('leave_records').select('*').gte('start_date', fiscalYearStartDate).lte('start_date', fiscalYearEndDate)
                 ]);
 
                 if (fiscalDataRes.error) throw fiscalDataRes.error;
                 if (leaveRecordsRes.error) throw leaveRecordsRes.error;
 
                 const fiscalData = fiscalDataRes.data;
-                const leaveRecords = leaveRecordsRes.data;
+                const allFiscalLeaveRecords = leaveRecordsRes.data;
 
+                // 4. Process Data
                 let reportData = allStaffData.map(staff => {
                     const staffFiscal = fiscalData.find(f => f.staff_id === staff.id);
                     const accumulated = staffFiscal ? staffFiscal.accumulated_vacation : 0;
 
-                    const staffLeaves = leaveRecords.filter(l => l.staff_id === staff.id);
-                    const vacation = staffLeaves.filter(l => l.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0);
-                    const personal = staffLeaves.filter(l => l.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0);
-                    const sick = staffLeaves.filter(l => l.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0);
+                    // Filter records belonging to this staff
+                    const staffAllFiscalLeaves = allFiscalLeaveRecords.filter(l => l.staff_id === staff.id);
                     
+                    // Filter records for the report display columns (Taken in Selected Period) - OVERLAP Logic
+                    const staffReportLeaves = staffAllFiscalLeaves.filter(record => {
+                        const recStart = new Date(record.start_date);
+                        const recEnd = new Date(record.end_date);
+                        const repStart = new Date(reportStartDate);
+                        const repEnd = new Date(reportEndDate);
+                        // Check for overlap
+                        return recStart <= repEnd && recEnd >= repStart;
+                    });
+
+                    // Totals for Selected Period (Display)
+                    const vacationTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0);
+                    const personalTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0);
+                    const sickTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0);
+
+                    // Totals for Entire Fiscal Year (Balance Calculation) - STRICT Logic (Start Date)
+                    const vacationTakenFiscalYearStrict = staffAllFiscalLeaves.filter(l => {
+                        const recStart = new Date(l.start_date);
+                        const fyStart = new Date(fiscalYearStartDate);
+                        const fyEnd = new Date(fiscalYearEndDate);
+                        return l.leave_type === 'vacation' && recStart >= fyStart && recStart <= fyEnd;
+                    }).reduce((sum, r) => sum + r.days_taken, 0);
+
                     return {
                         name: staff.name,
                         staff_type: staff.staff_type,
                         accumulated: accumulated,
-                        vacationTaken: vacation,
-                        vacationRemaining: accumulated - vacation,
-                        personalTaken: personal,
-                        sickTaken: sick
+                        vacationTaken: vacationTakenPeriod, // Displayed: Overlapping usage for period
+                        vacationRemaining: accumulated - vacationTakenFiscalYearStrict, // Balance: Annual
+                        personalTaken: personalTakenPeriod,
+                        sickTaken: sickTakenPeriod
                     };
                 });
                 
-                // Sort the report data by the specified staff type order
+                // Sort
                 const groupOrder = ['ทันตแพทย์', 'ทันตาภิบาล', 'พนักงานบริการ', 'พนักงานช่วยเหลือคนไข้'];
                 reportData.sort((a, b) => {
                     const indexA = groupOrder.indexOf(a.staff_type);
                     const indexB = groupOrder.indexOf(b.staff_type);
-
                     const finalIndexA = indexA === -1 ? Infinity : indexA;
                     const finalIndexB = indexB === -1 ? Infinity : indexB;
-
-                    if (finalIndexA !== finalIndexB) {
-                        return finalIndexA - finalIndexB;
-                    }
-                    
+                    if (finalIndexA !== finalIndexB) return finalIndexA - finalIndexB;
                     return a.name.localeCompare(b.name, 'th');
                 });
+                
+                const monthNames = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
+                let titleSuffix = `ประจำปีงบประมาณ ${fiscalYearBE}`;
+                if (reportType === 'monthly') {
+                    titleSuffix = `ประจำเดือน ${monthNames[selectedMonthIndex]} (ปีงบ ${fiscalYearBE})`;
+                }
 
-                renderReportTable(reportData, selectedYear);
+                renderReportTable(reportData, titleSuffix);
 
             } catch (error) {
                 console.error('Report generation error:', error);
@@ -779,10 +873,10 @@
             }
         }
 
-        function renderReportTable(data, year) {
+        function renderReportTable(data, titleSuffix) {
             const container = document.getElementById('report-results-container');
             if (data.length === 0) {
-                container.innerHTML = '<p class="text-center text-gray-500">ไม่พบข้อมูลสำหรับปีที่เลือก</p>';
+                container.innerHTML = '<p class="text-center text-gray-500">ไม่พบข้อมูลสำหรับช่วงเวลาที่เลือก</p>';
                 return;
             }
 
@@ -799,18 +893,18 @@
             `).join('');
 
             container.innerHTML = `
-                <h3 class="text-xl font-bold mb-4">รายงานสรุปวันลา ประจำปีงบประมาณ ${year}</h3>
+                <h3 class="text-xl font-bold mb-4">รายงานสรุปวันลา ${titleSuffix}</h3>
                 <div class="overflow-x-auto bg-white rounded-lg shadow">
                     <table class="min-w-full text-sm">
                         <thead class="bg-gray-200">
                             <tr>
                                 <th class="p-3 text-left">ชื่อ-สกุล</th>
                                 <th class="p-3 text-left">ตำแหน่ง</th>
-                                <th class="p-3">พักผ่อนสะสม</th>
-                                <th class="p-3">พักผ่อนใช้ไป</th>
-                                <th class="p-3">พักผ่อนคงเหลือ</th>
-                                <th class="p-3">ลากิจ</th>
-                                <th class="p-3">ลาป่วย</th>
+                                <th class="p-3">พักผ่อนสะสม (ปี)</th>
+                                <th class="p-3">พักผ่อนใช้ไป (ช่วงที่เลือก)</th>
+                                <th class="p-3">พักผ่อนคงเหลือ (ปี)</th>
+                                <th class="p-3">ลากิจ (ช่วงที่เลือก)</th>
+                                <th class="p-3">ลาป่วย (ช่วงที่เลือก)</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -1050,13 +1144,29 @@
             <button id="back-to-app-btn-report" class="bg-gray-500 text-white py-2 px-4 rounded-md hover:bg-gray-600">กลับหน้าหลัก</button>
         </header>
         <div class="bg-white p-6 rounded-lg shadow-md mb-8">
-            <div class="flex items-center gap-4 mb-4">
-                <label for="admin-report-fiscal-year-selector" class="font-medium">เลือกปีงบประมาณ:</label>
-                <select id="admin-report-fiscal-year-selector" class="p-2 border rounded-md"></select>
+            <div class="flex items-center gap-4 mb-4 flex-wrap">
+                <div>
+                    <label for="report-type-selector" class="font-medium mr-2">รูปแบบ:</label>
+                    <select id="report-type-selector" class="p-2 border rounded-md">
+                        <option value="yearly">รายปีงบประมาณ</option>
+                        <option value="monthly">รายเดือน</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label for="admin-report-fiscal-year-selector" class="font-medium mr-2">ปีงบประมาณ:</label>
+                    <select id="admin-report-fiscal-year-selector" class="p-2 border rounded-md"></select>
+                </div>
+
+                <div id="report-month-container" class="hidden flex items-center gap-2">
+                    <label for="report-month-selector" class="font-medium">เดือน:</label>
+                    <select id="report-month-selector" class="p-2 border rounded-md"></select>
+                </div>
+
                 <button id="generate-report-btn" class="bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700">สร้างรายงาน</button>
             </div>
             <div id="report-results-container">
-                <p class="text-center text-gray-500">กรุณาเลือกปีงบประมาณและกด "สร้างรายงาน" เพื่อดูข้อมูล</p>
+                <p class="text-center text-gray-500">กรุณาเลือกรูปแบบรายงานและกด "สร้างรายงาน" เพื่อดูข้อมูล</p>
             </div>
         </div>
     </div>
