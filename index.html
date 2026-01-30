@@ -217,16 +217,6 @@
                 calendarDate.setMonth(calendarDate.getMonth() + 1);
                 renderCalendar(calendarDate);
             });
-            
-            // Report type selector listener
-            document.getElementById('report-type-selector').addEventListener('change', (e) => {
-                const monthContainer = document.getElementById('report-month-container');
-                if (e.target.value === 'monthly') {
-                    monthContainer.classList.remove('hidden');
-                } else {
-                    monthContainer.classList.add('hidden');
-                }
-            });
 
             // More robust auth state handler
             supabase.auth.onAuthStateChange(async (event, session) => {
@@ -480,29 +470,12 @@
 
             const accumulatedVacation = fiscalError ? 0 : fiscalData.accumulated_vacation;
             
-            // FIX: Use Overlap logic for display data as well
-            const { data: leaveRecords, error } = await supabase.from('leave_records')
-                .select('*')
-                .eq('staff_id', staffId)
-                .lte('start_date', endDate)
-                .gte('end_date', startDate);
-                
+            const { data: leaveRecords, error } = await supabase.from('leave_records').select('*').eq('staff_id', staffId).gte('start_date', startDate).lte('start_date', endDate); 
             if (error) { showToast('ไม่สามารถดึงข้อมูลการลาได้', 'error'); return; } 
             
-            // Strict Calculation for "Remaining" (based on Start Date Rule)
-            const vacationTakenStrict = leaveRecords.filter(l => {
-                const recStart = new Date(l.start_date);
-                const periodStart = new Date(startDate);
-                const periodEnd = new Date(endDate);
-                return l.leave_type === 'vacation' && recStart >= periodStart && recStart <= periodEnd;
-            }).reduce((sum, r) => sum + r.days_taken, 0);
-
-            // Period Calculation (for display) - assumes overlap query is enough, or filter further if needed.
-            // For the dashboard summary, we usually show totals for the period.
-            // Let's stick to strict fiscal year accounting for these cards to avoid confusion.
-            const vacationTaken = vacationTakenStrict; // Use strict for dashboard cards
-            const personalTaken = leaveRecords.filter(l => l.leave_type === 'personal' && new Date(l.start_date) >= new Date(startDate) && new Date(l.start_date) <= new Date(endDate)).reduce((sum, r) => sum + r.days_taken, 0); 
-            const sickTaken = leaveRecords.filter(l => l.leave_type === 'sick' && new Date(l.start_date) >= new Date(startDate) && new Date(l.start_date) <= new Date(endDate)).reduce((sum, r) => sum + r.days_taken, 0); 
+            const vacationTaken = leaveRecords.filter(r => r.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0); 
+            const personalTaken = leaveRecords.filter(r => r.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0); 
+            const sickTaken = leaveRecords.filter(r => r.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0); 
             
             document.getElementById('accumulated-vacation').textContent = accumulatedVacation; 
             document.getElementById('vacation-taken').textContent = vacationTaken; 
@@ -744,103 +717,57 @@
 
             try {
                 const selectedYear = parseInt(document.getElementById('admin-report-fiscal-year-selector').value);
-                const reportType = document.getElementById('report-type-selector').value;
-                const selectedMonthIndex = parseInt(document.getElementById('report-month-selector').value);
+                const { startDate, endDate } = getFiscalYearRange(selectedYear);
 
-                const { startDate: fiscalStartDate, endDate: fiscalEndDate } = getFiscalYearRange(selectedYear);
-                
-                let reportStartDate, reportEndDate;
-                
-                if (reportType === 'yearly') {
-                    reportStartDate = fiscalStartDate;
-                    reportEndDate = fiscalEndDate;
-                } else {
-                    // Monthly Report Logic
-                    let calendarYearCE;
-                    if (selectedMonthIndex >= 9) { // Oct, Nov, Dec
-                         calendarYearCE = selectedYear - 544;
-                    } else { // Jan - Sep
-                         calendarYearCE = selectedYear - 543;
-                    }
-
-                    const daysInMonth = new Date(calendarYearCE, selectedMonthIndex + 1, 0).getDate();
-                    reportStartDate = `${calendarYearCE}-${String(selectedMonthIndex + 1).padStart(2, '0')}-01`;
-                    reportEndDate = `${calendarYearCE}-${String(selectedMonthIndex + 1).padStart(2, '0')}-${String(daysInMonth).padStart(2, '0')}`;
-                }
-
-                // Update fetch to use OVERLAP logic for leaves
+                // Fetch all necessary data in parallel
                 const [fiscalDataRes, leaveRecordsRes] = await Promise.all([
                     supabase.from('staff_fiscal_year_data').select('*').eq('fiscal_year_be', selectedYear),
-                    supabase.from('leave_records').select('*')
-                        .lte('start_date', fiscalEndDate) // Leave starts before end of fiscal year
-                        .gte('end_date', fiscalStartDate) // Leave ends after start of fiscal year
+                    supabase.from('leave_records').select('*').gte('start_date', startDate).lte('start_date', endDate)
                 ]);
 
                 if (fiscalDataRes.error) throw fiscalDataRes.error;
                 if (leaveRecordsRes.error) throw leaveRecordsRes.error;
 
                 const fiscalData = fiscalDataRes.data;
-                const allFiscalLeaveRecords = leaveRecordsRes.data;
+                const leaveRecords = leaveRecordsRes.data;
 
                 let reportData = allStaffData.map(staff => {
                     const staffFiscal = fiscalData.find(f => f.staff_id === staff.id);
                     const accumulated = staffFiscal ? staffFiscal.accumulated_vacation : 0;
 
-                    // Filter records belonging to this staff
-                    const staffAllFiscalLeaves = allFiscalLeaveRecords.filter(l => l.staff_id === staff.id);
+                    const staffLeaves = leaveRecords.filter(l => l.staff_id === staff.id);
+                    const vacation = staffLeaves.filter(l => l.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0);
+                    const personal = staffLeaves.filter(l => l.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0);
+                    const sick = staffLeaves.filter(l => l.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0);
                     
-                    // Filter records for the report display columns (Taken in Selected Period) - OVERLAP Logic
-                    const staffReportLeaves = staffAllFiscalLeaves.filter(record => {
-                        const recStart = new Date(record.start_date);
-                        const recEnd = new Date(record.end_date);
-                        const repStart = new Date(reportStartDate);
-                        const repEnd = new Date(reportEndDate);
-                        return recStart <= repEnd && recEnd >= repStart;
-                    });
-
-                    // Totals for Selected Period (Display)
-                    const vacationTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'vacation').reduce((sum, r) => sum + r.days_taken, 0);
-                    const personalTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'personal').reduce((sum, r) => sum + r.days_taken, 0);
-                    const sickTakenPeriod = staffReportLeaves.filter(l => l.leave_type === 'sick').reduce((sum, r) => sum + r.days_taken, 0);
-
-                    // Totals for Entire Fiscal Year (Balance Calculation) - STRICT Logic (Start Date)
-                    // We only deduct leaves that *start* within the fiscal year to avoid double deduction
-                    const vacationTakenFiscalYearStrict = staffAllFiscalLeaves.filter(l => {
-                        const recStart = new Date(l.start_date);
-                        const fyStart = new Date(fiscalStartDate);
-                        const fyEnd = new Date(fiscalEndDate);
-                        return l.leave_type === 'vacation' && recStart >= fyStart && recStart <= fyEnd;
-                    }).reduce((sum, r) => sum + r.days_taken, 0);
-
                     return {
                         name: staff.name,
                         staff_type: staff.staff_type,
                         accumulated: accumulated,
-                        vacationTaken: vacationTakenPeriod, // Displayed: Overlapping usage
-                        vacationRemaining: accumulated - vacationTakenFiscalYearStrict, // Balance: Strict fiscal accounting
-                        personalTaken: personalTakenPeriod,
-                        sickTaken: sickTakenPeriod
+                        vacationTaken: vacation,
+                        vacationRemaining: accumulated - vacation,
+                        personalTaken: personal,
+                        sickTaken: sick
                     };
                 });
                 
-                // Sort
+                // Sort the report data by the specified staff type order
                 const groupOrder = ['ทันตแพทย์', 'ทันตาภิบาล', 'พนักงานบริการ', 'พนักงานช่วยเหลือคนไข้'];
                 reportData.sort((a, b) => {
                     const indexA = groupOrder.indexOf(a.staff_type);
                     const indexB = groupOrder.indexOf(b.staff_type);
+
                     const finalIndexA = indexA === -1 ? Infinity : indexA;
                     const finalIndexB = indexB === -1 ? Infinity : indexB;
-                    if (finalIndexA !== finalIndexB) return finalIndexA - finalIndexB;
+
+                    if (finalIndexA !== finalIndexB) {
+                        return finalIndexA - finalIndexB;
+                    }
+                    
                     return a.name.localeCompare(b.name, 'th');
                 });
-                
-                const months = ["มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน", "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"];
-                let titleSuffix = `ประจำปีงบประมาณ ${selectedYear}`;
-                if (reportType === 'monthly') {
-                    titleSuffix = `ประจำเดือน ${months[selectedMonthIndex]} (ปีงบ ${selectedYear})`;
-                }
 
-                renderReportTable(reportData, titleSuffix);
+                renderReportTable(reportData, selectedYear);
 
             } catch (error) {
                 console.error('Report generation error:', error);
@@ -852,10 +779,10 @@
             }
         }
 
-        function renderReportTable(data, titleSuffix) {
+        function renderReportTable(data, year) {
             const container = document.getElementById('report-results-container');
             if (data.length === 0) {
-                container.innerHTML = '<p class="text-center text-gray-500">ไม่พบข้อมูลสำหรับช่วงเวลาที่เลือก</p>';
+                container.innerHTML = '<p class="text-center text-gray-500">ไม่พบข้อมูลสำหรับปีที่เลือก</p>';
                 return;
             }
 
@@ -872,18 +799,18 @@
             `).join('');
 
             container.innerHTML = `
-                <h3 class="text-xl font-bold mb-4">รายงานสรุปวันลา ${titleSuffix}</h3>
+                <h3 class="text-xl font-bold mb-4">รายงานสรุปวันลา ประจำปีงบประมาณ ${year}</h3>
                 <div class="overflow-x-auto bg-white rounded-lg shadow">
                     <table class="min-w-full text-sm">
                         <thead class="bg-gray-200">
                             <tr>
                                 <th class="p-3 text-left">ชื่อ-สกุล</th>
                                 <th class="p-3 text-left">ตำแหน่ง</th>
-                                <th class="p-3">พักผ่อนสะสม (ปี)</th>
-                                <th class="p-3">พักผ่อนใช้ไป (ช่วงที่เลือก)</th>
-                                <th class="p-3">พักผ่อนคงเหลือ (ปี)</th>
-                                <th class="p-3">ลากิจ (ช่วงที่เลือก)</th>
-                                <th class="p-3">ลาป่วย (ช่วงที่เลือก)</th>
+                                <th class="p-3">พักผ่อนสะสม</th>
+                                <th class="p-3">พักผ่อนใช้ไป</th>
+                                <th class="p-3">พักผ่อนคงเหลือ</th>
+                                <th class="p-3">ลากิจ</th>
+                                <th class="p-3">ลาป่วย</th>
                             </tr>
                         </thead>
                         <tbody>
